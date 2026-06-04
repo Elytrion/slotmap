@@ -9,7 +9,6 @@
 //   and erase uses swap-remove to keep the array dense.
 
 #include <cstdint>
-#include <limits>
 #include <type_traits>
 #include <utility>
 

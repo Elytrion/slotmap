@@ -8,6 +8,7 @@
 #include <vector>
 #include <algorithm>
 #include <optional>
+#include <limits>
 
 // You could override memory allocator by defining SLOT_MAP_ALLOC/SLOT_MAP_FREE macroses
 #if !defined(SLOT_MAP_ALLOC) || !defined(SLOT_MAP_FREE)
