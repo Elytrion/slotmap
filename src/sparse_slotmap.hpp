@@ -643,8 +643,8 @@ namespace sparse_slotmap
         /*
           Constructs element in-place and returns a unique key that can be used to access this value.
         */
-        template <class... Args> key
-        [[nodiscard]] emplace(Args&&... args)
+        template <class... Args>  
+        [[nodiscard]] key emplace(Args&&... args)
         {
             // Use recycled IDs only if we accumulated enough of them
             if (static_cast<size_type>(freeIndices.size()) > kMinFreeIndices)
