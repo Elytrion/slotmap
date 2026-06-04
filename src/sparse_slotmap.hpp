@@ -825,7 +825,7 @@ namespace sparse_slotmap
             else
             {
                 // recycle index id (note: tag is not saved!)
-                freeIndices.emplace_back(key::clearTagAndUpdateVersion(k, slotVersion));
+                freeIndices.emplace_back(key::updateVersion(k, slotVersion));
             }
             return EraseResult::ErasedAndIndexRecycled;
         }
