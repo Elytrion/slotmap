@@ -1,5 +1,5 @@
 #pragma once
-
+// modified from original implementation from https://github.com/SergeyMakeev/SlotMap/blob/main/slot_map/slot_map.h
 // Dense, non-paged generational slot map.
 // Similar public shape to sparse_slotmap::slot_map, but stores live values packed in a dense vector.
 //
@@ -8,264 +8,22 @@
 // - Pointers/references/iterators to values are NOT stable across emplace/erase because values live in std::vector
 //   and erase uses swap-remove to keep the array dense.
 
-#include <algorithm>
-#include <assert.h>
-#include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <functional>
 #include <limits>
-#include <optional>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
-// You could override memory allocator by defining SLOT_MAP_ALLOC/SLOT_MAP_FREE macroses.
-#if !defined(SLOT_MAP_ALLOC) || !defined(SLOT_MAP_FREE)
-
-#if defined(_WIN32)
-#include <xmmintrin.h>
-#define SLOT_MAP_ALLOC(sizeInBytes, alignment) _mm_malloc(sizeInBytes, alignment)
-#define SLOT_MAP_FREE(ptr) _mm_free(ptr)
-#else
-#include <stdlib.h>
-#define SLOT_MAP_ALLOC(sizeInBytes, alignment) aligned_alloc(alignment, sizeInBytes)
-#define SLOT_MAP_FREE(ptr) free(ptr)
-#endif
-
-#endif
-
-// You could override asserts by defining SLOT_MAP_ASSERT macro.
-#if !defined(SLOT_MAP_ASSERT)
-#define SLOT_MAP_ASSERT(expression) assert(expression)
-#endif
-
-namespace stl
-{
-    // STL-compatible aligned allocator.
-    // Note: some platforms do not support alignments smaller than alignof(void*).
-    template <class T, size_t Alignment = std::max(alignof(T), alignof(void*))>
-    struct Allocator
-    {
-    public:
-        using value_type = T;
-        using pointer = T*;
-        using const_pointer = const T*;
-        using reference = T&;
-        using const_reference = const T&;
-        using size_type = size_t;
-        using difference_type = ptrdiff_t;
-
-        template <class U>
-        struct rebind
-        {
-            using other = Allocator<U, Alignment>;
-        };
-
-        Allocator() noexcept = default;
-        Allocator(const Allocator&) noexcept = default;
-
-        template <typename U>
-        Allocator(const Allocator<U, Alignment>&) noexcept {}
-
-        [[nodiscard]] pointer address(reference x) const noexcept { return &x; }
-        [[nodiscard]] const_pointer address(const_reference x) const noexcept { return &x; }
-
-        [[nodiscard]] pointer allocate(size_type n, [[maybe_unused]] const void* hint = nullptr)
-        {
-            size_t alignment = std::max(Alignment, alignof(void*));
-            size_t numBytes = sizeof(value_type) * n;
-            numBytes = (numBytes + (alignment - 1)) & ~(alignment - 1);
-            pointer p = reinterpret_cast<pointer>(SLOT_MAP_ALLOC(numBytes, alignment));
-            SLOT_MAP_ASSERT(p);
-            return p;
-        }
-
-        void deallocate(pointer p, size_type) noexcept { SLOT_MAP_FREE(p); }
-
-        [[nodiscard]] size_type max_size() const noexcept
-        {
-            return std::numeric_limits<size_type>::max() / sizeof(value_type);
-        }
-
-        template <class U, class... Args>
-        void construct(U* p, Args&&... args)
-        {
-            new (reinterpret_cast<void*>(p)) U(std::forward<Args>(args)...);
-        }
-
-        template <class U>
-        void destroy(U* p)
-        {
-            p->~U();
-        }
-    };
-
-    template <class T1, class T2, size_t Alignment>
-    bool operator==(const Allocator<T1, Alignment>&, const Allocator<T2, Alignment>&) noexcept
-    {
-        return true;
-    }
-
-    template <class T1, class T2, size_t Alignment>
-    bool operator!=(const Allocator<T1, Alignment>&, const Allocator<T2, Alignment>&) noexcept
-    {
-        return false;
-    }
-} // namespace stl
+#include "slotmap_commons.hpp"
 
 namespace dense_slotmap
 {
-    /*
-    Strongly typed 64-bit key.
+    struct dense_key_domain {};
 
-    | Component | Number of bits          |
-    |-----------|--------------------------|
-    | version   | 32 (0..4,294,967,295)    |
-    | index     | 32 (0..4,294,967,295)    |
-    */
     template <typename T>
-    struct slot_map_key64
-    {
-        using id_type = uint64_t;
-        using version_t = uint32_t;
-        using index_t = uint32_t;
+    using slot_map_key64 = slotmap_commons::slot_map_key64<T, dense_key_domain>;
 
-        static inline constexpr version_t kInvalidVersion = 0x0u;
-        static inline constexpr version_t kMinVersion = 0x1u;
-        static inline constexpr version_t kMaxVersion = 0xffffffffu;
-        static inline constexpr index_t kMaxIndex = 0xffffffffu;
-
-        static inline constexpr id_type kIndexMask = 0x00000000ffffffffull;
-        static inline constexpr id_type kVersionMask = 0xffffffff00000000ull;
-        static inline constexpr id_type kVersionShift = 32ull;
-
-        [[nodiscard]] static inline constexpr slot_map_key64 make(version_t version, index_t index) noexcept
-        {
-            SLOT_MAP_ASSERT(version != kInvalidVersion);
-            SLOT_MAP_ASSERT(index <= kMaxIndex);
-
-            id_type v = (static_cast<id_type>(version) << kVersionShift) & kVersionMask;
-            id_type i = static_cast<id_type>(index) & kIndexMask;
-            return slot_map_key64{ v | i };
-        }
-
-        [[nodiscard]] inline size_t hash() const noexcept { return std::hash<id_type>{}(raw); }
-
-        [[nodiscard]] static inline slot_map_key64 updateVersion(slot_map_key64 k, version_t version) noexcept
-        {
-            SLOT_MAP_ASSERT(version != kInvalidVersion);
-            id_type v = (static_cast<id_type>(version) << kVersionShift) & kVersionMask;
-            return slot_map_key64{ (k.raw & ~kVersionMask) | v };
-        }
-
-        [[nodiscard]] static inline index_t toIndex(slot_map_key64 k) noexcept
-        {
-            return static_cast<index_t>(k.raw & kIndexMask);
-        }
-
-        [[nodiscard]] static inline version_t toVersion(slot_map_key64 k) noexcept
-        {
-            return static_cast<version_t>((k.raw & kVersionMask) >> kVersionShift);
-        }
-
-        [[nodiscard]] static inline version_t increaseVersion(version_t version) noexcept { return version + 1u; }
-
-        slot_map_key64() noexcept = default;
-
-        explicit slot_map_key64(id_type _raw) noexcept
-            : raw(_raw)
-        {
-        }
-
-        bool operator==(const slot_map_key64& other) const noexcept { return raw == other.raw; }
-        bool operator!=(const slot_map_key64& other) const noexcept { return raw != other.raw; }
-        bool operator<(const slot_map_key64& other) const noexcept { return raw < other.raw; }
-
-        [[nodiscard]] explicit operator id_type() const noexcept { return raw; }
-
-        [[nodiscard]] static inline slot_map_key64 invalid() noexcept { return slot_map_key64{ 0 }; }
-
-        id_type raw = 0;
-    };
-
-    /*
-    Strongly typed 32-bit key.
-
-    | Component | Number of bits     |
-    |-----------|---------------------|
-    | version   | 12 (0..4095)        |
-    | index     | 20 (0..1,048,575)   |
-    */
     template <typename T>
-    struct slot_map_key32
-    {
-        using id_type = uint32_t;
-        using version_t = uint16_t;
-        using index_t = uint32_t;
-
-        static inline constexpr version_t kInvalidVersion = 0x0u;
-        static inline constexpr version_t kMinVersion = 0x1u;
-        static inline constexpr version_t kMaxVersion = 0x0fffu;
-        static inline constexpr index_t kMaxIndex = 0x000fffffu;
-
-        static inline constexpr id_type kIndexMask = 0x000fffffu;
-        static inline constexpr id_type kVersionMask = 0xfff00000u;
-        static inline constexpr id_type kVersionShift = 20u;
-
-        [[nodiscard]] static inline constexpr slot_map_key32 make(version_t version, index_t index) noexcept
-        {
-            SLOT_MAP_ASSERT(version != kInvalidVersion);
-            SLOT_MAP_ASSERT(version <= kMaxVersion);
-            SLOT_MAP_ASSERT(index <= kMaxIndex);
-
-            id_type v = (static_cast<id_type>(version) << kVersionShift) & kVersionMask;
-            id_type i = static_cast<id_type>(index) & kIndexMask;
-            return slot_map_key32{ v | i };
-        }
-
-        [[nodiscard]] inline size_t hash() const noexcept { return std::hash<id_type>{}(raw); }
-
-        [[nodiscard]] static inline slot_map_key32 updateVersion(slot_map_key32 k, version_t version) noexcept
-        {
-            SLOT_MAP_ASSERT(version != kInvalidVersion);
-            SLOT_MAP_ASSERT(version <= kMaxVersion);
-            id_type v = (static_cast<id_type>(version) << kVersionShift) & kVersionMask;
-            return slot_map_key32{ (k.raw & ~kVersionMask) | v };
-        }
-
-        [[nodiscard]] static inline index_t toIndex(slot_map_key32 k) noexcept
-        {
-            return static_cast<index_t>(k.raw & kIndexMask);
-        }
-
-        [[nodiscard]] static inline version_t toVersion(slot_map_key32 k) noexcept
-        {
-            return static_cast<version_t>((k.raw & kVersionMask) >> kVersionShift);
-        }
-
-        [[nodiscard]] static inline version_t increaseVersion(version_t version) noexcept
-        {
-            return static_cast<version_t>(version + 1u);
-        }
-
-        slot_map_key32() noexcept = default;
-
-        explicit slot_map_key32(id_type _raw) noexcept
-            : raw(_raw)
-        {
-        }
-
-        bool operator==(const slot_map_key32& other) const noexcept { return raw == other.raw; }
-        bool operator!=(const slot_map_key32& other) const noexcept { return raw != other.raw; }
-        bool operator<(const slot_map_key32& other) const noexcept { return raw < other.raw; }
-
-        [[nodiscard]] explicit operator id_type() const noexcept { return raw; }
-
-        [[nodiscard]] static inline slot_map_key32 invalid() noexcept { return slot_map_key32{ 0 }; }
-
-        id_type raw = 0;
-    };
+    using slot_map_key32 = slotmap_commons::slot_map_key32<T, dense_key_domain>;
 
     template <typename T, typename TKeyType = slot_map_key64<T>, size_t MINFREEINDICES = 64>
     class slot_map
