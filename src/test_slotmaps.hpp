@@ -1,12 +1,3 @@
-// test_slotmaps.cpp
-// Compile example:
-//   g++ -std=c++17 -Wall -Wextra -pedantic -I. test_slotmaps.cpp -o test_slotmaps
-//
-// If your local header names differ, either rename them to sparse_slotmap.hpp / dense_slotmap.hpp,
-// or pass include overrides, for example:
-//   g++ -std=c++17 -Wall -Wextra -pedantic -I. -DSPARSE_SLOTMAP_HEADER='"sparse_slotmap(2).hpp"'
-//       -DDENSE_SLOTMAP_HEADER='"dense_slotmap(1).hpp"'
-//       test_slotmaps.cpp -o test_slotmaps
 
 #include <algorithm>
 #include <cstdint>
@@ -20,30 +11,8 @@
 #include <utility>
 #include <vector>
 
-#ifndef SPARSE_SLOTMAP_HEADER
-    #if __has_include("sparse_slotmap(2).hpp")
-        #define SPARSE_SLOTMAP_HEADER "sparse_slotmap(2).hpp"
-    #elif __has_include("sparse_slotmap.hpp")
-        #define SPARSE_SLOTMAP_HEADER "sparse_slotmap.hpp"
-    #elif __has_include("sparse_slotmap(1).hpp")
-        #define SPARSE_SLOTMAP_HEADER "sparse_slotmap(1).hpp"
-    #else
-        #error "Could not find sparse slot map header. Define SPARSE_SLOTMAP_HEADER."
-    #endif
-#endif
-
-#ifndef DENSE_SLOTMAP_HEADER
-    #if __has_include("dense_slotmap(1).hpp")
-        #define DENSE_SLOTMAP_HEADER "dense_slotmap(1).hpp"
-    #elif __has_include("dense_slotmap.hpp")
-        #define DENSE_SLOTMAP_HEADER "dense_slotmap(1).hpp"
-    #else
-        #error "Could not find dense slot map header. Define DENSE_SLOTMAP_HEADER."
-    #endif
-#endif
-
-#include SPARSE_SLOTMAP_HEADER
-#include DENSE_SLOTMAP_HEADER
+#include "dense_slotmap.hpp"
+#include "sparse_slotmap.hpp"
 
 struct Payload
 {
